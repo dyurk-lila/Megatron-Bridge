@@ -173,6 +173,8 @@ class MiMoV2FlashBridge(MegatronModelBridge):
         provider.moe_router_load_balancing_type = "none"
         provider.moe_router_enable_expert_bias = True
         provider.moe_grouped_gemm = True
+        # MiMo always gates with sigmoid; native HF configs carry no scoring_func.
+        provider.moe_router_score_function = "sigmoid"
         provider.moe_router_pre_softmax = True
         provider.moe_token_dispatcher_type = "alltoall"
 
