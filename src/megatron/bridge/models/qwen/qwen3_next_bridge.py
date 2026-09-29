@@ -69,7 +69,7 @@ class Qwen3NextBridge(MegatronModelBridge):
         provider.moe_grouped_gemm = True
         provider.moe_router_load_balancing_type = "global_aux_loss"
         provider.moe_aux_loss_coeff = 1e-3
-        provider.moe_router_pre_softmax = False
+        provider.moe_router_pre_softmax = not hf_config.norm_topk_prob
         provider.moe_token_dispatcher_type = "alltoall"
         provider.moe_permute_fusion = True
         provider.moe_shared_expert_gate = True

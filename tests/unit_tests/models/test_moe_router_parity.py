@@ -278,6 +278,16 @@ CASES = {
         ),
         lambda cfg: _qwen_gate(cfg, normalize=cfg.norm_topk_prob),
     ),
+    "qwen3_next_no_norm": _from_hf(
+        lambda: Qwen3NextConfig(
+            architectures=["Qwen3NextForCausalLM"],
+            **_SMALL,
+            num_experts=512,
+            num_experts_per_tok=10,
+            norm_topk_prob=False,
+        ),
+        lambda cfg: _qwen_gate(cfg, normalize=cfg.norm_topk_prob),
+    ),
     "qwen3_5_moe": _from_hf(
         lambda: Qwen3_5MoeTextConfig(
             architectures=["Qwen3_5MoeForCausalLM"], **_SMALL, num_experts=512, num_experts_per_tok=10
@@ -318,13 +328,12 @@ CASES = {
         _deepseek_gate,
     ),
     "mimo_v2_flash": _from_hf(
-        # The bridge reads the hub config.json field names.
+        # Native configs have no scoring_func; MiMo always gates with sigmoid.
         lambda: MiMoV2FlashConfig(
             architectures=["MiMoV2FlashForCausalLM"],
             **_SMALL,
             n_routed_experts=256,
             num_experts_per_tok=8,
-            scoring_func="sigmoid",
             routed_scaling_factor=None,
             rope_theta=5000000,
             swa_rope_theta=10000,
