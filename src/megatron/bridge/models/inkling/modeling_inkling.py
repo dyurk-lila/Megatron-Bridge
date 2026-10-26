@@ -289,11 +289,16 @@ class InklingSelfAttention(SelfAttention):
 class InklingRouter(Router):
     """Native MoE router with shared sink experts included in normalization."""
 
-    def __init__(self, config, pg_collection=None, is_mtp_layer=False) -> None:
+    def __init__(self, config, pg_collection=None, is_mtp_layer=False, hash_moe_layer_threshold=None) -> None:
         router_config = copy(config)
         self.num_routed_experts = config.num_moe_experts
         router_config.num_moe_experts += config.inkling_n_shared_experts
-        super().__init__(router_config, pg_collection=pg_collection, is_mtp_layer=is_mtp_layer)
+        super().__init__(
+            router_config,
+            pg_collection=pg_collection,
+            is_mtp_layer=is_mtp_layer,
+            hash_moe_layer_threshold=hash_moe_layer_threshold,
+        )
         self.register_buffer(
             "expert_bias", mark_keep_in_fp32(torch.zeros(self.num_routed_experts, dtype=torch.float32))
         )
@@ -329,7 +334,9 @@ class InklingRouter(Router):
         routing_map = torch.zeros(shape, dtype=torch.bool, device=logits.device).scatter(-1, indices, True)
         return probs.reshape(-1, self.num_routed_experts), routing_map.reshape(-1, self.num_routed_experts)
 
-    def forward(self, hidden_states: Tensor, padding_mask: Tensor | None = None) -> tuple[Tensor, Tensor]:
+    def forward(
+        self, hidden_states: Tensor, padding_mask: Tensor | None = None, input_ids: Tensor | None = None
+    ) -> tuple[Tensor, Tensor]:
         """Compute routing without auxiliary losses or online selection-bias updates."""
         with torch.autocast(device_type=hidden_states.device.type, enabled=False):
             probs, routing_map = self.routing(F.linear(hidden_states.float(), self.weight.float()))
