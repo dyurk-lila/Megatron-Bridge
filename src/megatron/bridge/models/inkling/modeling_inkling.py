@@ -52,7 +52,11 @@ if TYPE_CHECKING:
     from megatron.core.transformer.transformer_config import TransformerConfig
 
 
-_compiled_flex_attention = torch.compile(flex_attention, dynamic=True)
+# Per-wrapper recompile limits: torch >= 2.13 keeps dynamo config assignments thread-local, and the
+# backward and recompute run on autograd's thread, which would see the default of 8. Past the limit
+# create_block_mask runs eagerly and materializes a dense [length, length] mask.
+_compiled_flex_attention = torch.compile(flex_attention, dynamic=True, recompile_limit=64)
+_compiled_create_block_mask = torch.compile(create_block_mask, dynamic=True, recompile_limit=64)
 
 
 def joint_router_weights(
@@ -104,9 +108,13 @@ def relative_attention(
         bias = relative_bias[b, h, q, distance.clamp(0, extent - 1)]
         return score + torch.where((distance >= 0) & (distance < extent), bias, 0.0)
 
-    block_mask = create_block_mask(
-        mask_mod, batch, None, length, length, device=str(query.device), _compile=query.is_cuda
-    )
+    if query.is_cuda:
+        # Under no_grad so the forward, the recompute and the logprob-only pass share one compiled entry
+        # per shape instead of one per grad mode.
+        with torch.no_grad():
+            block_mask = _compiled_create_block_mask(mask_mod, batch, None, length, length, device=str(query.device))
+    else:
+        block_mask = create_block_mask(mask_mod, batch, None, length, length, device=str(query.device))
     attention = _compiled_flex_attention if query.is_cuda else flex_attention
     options = {"kernel_options": {"BACKEND": "TRITON"}} if query.is_cuda else {}
     return attention(
