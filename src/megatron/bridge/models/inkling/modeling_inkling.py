@@ -32,6 +32,7 @@ from megatron.core.extensions.transformer_engine import (
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
 from megatron.core.models.gpt.gpt_model import GPTModel
 from megatron.core.tensor_parallel import (
+    checkpoint,
     gather_from_sequence_parallel_region,
     scatter_to_sequence_parallel_region,
     set_tensor_model_parallel_attributes,
@@ -484,11 +485,30 @@ class InklingTransformerLayer(TransformerLayer):
         if bias is not None:
             attention = attention + bias
         hidden_states = hidden_states + self.attn_sconv(attention, full_padding)
-        mlp_output, bias = self.mlp(self.pre_mlp_layernorm(hidden_states), padding_mask=padding_mask)
+        mlp_output, bias = self._mlp(self.pre_mlp_layernorm(hidden_states), padding_mask)
         if bias is not None:
             mlp_output = mlp_output + bias
         output = hidden_states + self.mlp_sconv(mlp_output, full_padding)
         return output, None
+
+    def _mlp(self, hidden_states: Tensor, padding_mask: Tensor | None) -> tuple[Tensor, Tensor | None]:
+        """The MLP, run in ``mlp_chunks_for_training`` sequence chunks when training.
+
+        Mirrors TransformerLayer's chunking, which this forward bypasses, and checkpoints each chunk
+        when grads are on, so a full-layer recompute also holds one chunk's expert activations at a
+        time. Every EP rank runs the same number of chunks, so the dispatches stay matched.
+        """
+        num_chunks = self.config.mlp_chunks_for_training
+        if num_chunks <= 1 or not self.training:
+            return self.mlp(hidden_states, padding_mask=padding_mask)
+        chunks = hidden_states.tensor_split(num_chunks, dim=0)
+        mask_chunks = padding_mask.tensor_split(num_chunks, dim=1) if padding_mask is not None else (None,) * len(chunks)
+        outputs, bias = [], None
+        for chunk, mask_chunk in zip(chunks, mask_chunks, strict=True):
+            run = partial(self.mlp, padding_mask=mask_chunk)
+            out, bias = checkpoint(run, False, chunk) if torch.is_grad_enabled() else run(chunk)
+            outputs.append(out)
+        return torch.cat(outputs, dim=0), bias
 
 
 def inkling_layer_spec(config, vp_stage: int | None = None):
